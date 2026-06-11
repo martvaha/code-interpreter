@@ -2,7 +2,7 @@ from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 
 class Settings(BaseSettings):
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # API settings
     PORT: int = 8000  # Port exposed from the container
     API_PREFIX: str = "/v1"  # API prefix
+    API_KEY: Optional[str] = None  # When set, requests must send a matching x-api-key header
 
     # Code execution sandbox settings
     SANDBOX_MAX_EXECUTION_TIME: int = 300  # Docker container execution time limit in seconds

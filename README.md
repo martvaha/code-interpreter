@@ -30,6 +30,16 @@ By default the project will create two directories in the root directory: `./con
 `config` directory will hold the sqlite database and temp uploaded files.
 `uploads` directory will hold the files uploaded by the users. All files uploaded by the users will be, by default, deleted after 24 hours.
 
+### Authentication
+
+By default the API is unauthenticated. To require an API key, set `API_KEY` in the service environment (or `.env`):
+
+```ini
+API_KEY=<your-secret-key>
+```
+
+When set, all `/v1` endpoints require a matching `x-api-key` header and return `401` otherwise (`/health` stays open). LibreChat sends this header automatically using its `LIBRECHAT_CODE_API_KEY` value, so the two must match.
+
 ### Configuring LibreChat
 
 LibreChat is configured to use the code interpreter API by default.
@@ -37,7 +47,7 @@ LibreChat is configured to use the code interpreter API by default.
 To configure LibreChat to use the local code interpreter, set the following environment variables in LibreChat:
 
 ```ini
-LIBRECHAT_CODE_API_KEY=<any-value-here>
+LIBRECHAT_CODE_API_KEY=<any-value-here> # must match the service's API_KEY if one is configured
 LIBRECHAT_CODE_BASEURL=http(s)://host:port/v1/librechat # for local testing use to point to host IP http://host.docker.internal:8000/v1/librechat
 ```
 

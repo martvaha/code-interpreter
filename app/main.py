@@ -1,15 +1,18 @@
 from contextlib import asynccontextmanager
 
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
 
+from .api.auth import verify_api_key
 from .api.base import router as base_router
 from .api.librechat import router as librechat_router
 from .api.container import router as docker_router
 from .services.database import db_manager
 from .services.cleanup import cleanup_service
+from .shared.config import get_settings
 from .utils.logging import setup_logging, RequestLoggingMiddleware
 from .services.docker_executor import docker_executor
 
@@ -62,10 +65,19 @@ app.add_middleware(
 # Add logging middleware
 app.add_middleware(RequestLoggingMiddleware)
 
-# Include routers
-app.include_router(base_router)
-app.include_router(librechat_router)
-app.include_router(docker_router)
+# Include routers (all /v1 routes require x-api-key when API_KEY is configured)
+app.include_router(base_router, dependencies=[Depends(verify_api_key)])
+app.include_router(librechat_router, dependencies=[Depends(verify_api_key)])
+app.include_router(docker_router, dependencies=[Depends(verify_api_key)])
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Use the LibreChat error format ({"message": ...}) on /v1/librechat paths."""
+    settings = get_settings()
+    if request.url.path.startswith(f"{settings.API_PREFIX}/librechat"):
+        return JSONResponse(status_code=exc.status_code, content={"message": str(exc.detail)}, headers=exc.headers)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 @app.get("/health")
