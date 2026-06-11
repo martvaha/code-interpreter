@@ -7,4 +7,4 @@ alwaysApply: true
 - Install deps with uv sync --all-extras
 - After making changes, run `pytest tests -v` or for specific test `pytest tests/{test} -v`
 - Check test logs from `logs/test.log`
-- After making changes, verify that [endpoints.py](mdc:app/api/endpoints.py) still follows [librechat-code-interpreter-openapi.json](mdc:project/librechat-code-interpreter-openapi.json)
+- After making changes, verify that [librechat.py](mdc:app/api/librechat.py) still follows the LibreChat endpoint contract in [librechat-endpoints.mdc](mdc:.cursor/rules/librechat-endpoints.mdc)

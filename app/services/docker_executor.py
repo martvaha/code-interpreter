@@ -16,11 +16,25 @@ from app.utils.generate_id import generate_id
 import aiodocker
 import json
 import os
+import re
 
 from ..shared.config import get_settings
 from .database import db_manager
 
 settings = get_settings()
+
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{21}$")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Ensure a session id is a well-formed nanoid before any filesystem use.
+
+    Guards against path traversal when session ids are joined into host paths
+    (session directories, Docker bind-mount sources).
+    """
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(f"Invalid session id: {session_id!r}")
+    return session_id
 
 
 @dataclass
@@ -258,26 +272,42 @@ class DockerExecutor:
         except Exception as e:
             logger.error(f"Error updating metrics for container {container.id}: {str(e)}")
 
-    def _clean_output(self, raw_output: bytes) -> str:
-        """Clean Docker multiplexed output format."""
-        # Skip the first 8 bytes of each frame (header) and combine the rest
-        output_parts = []
+    def _clean_output(self, raw_output: bytes) -> Tuple[str, str]:
+        """Demultiplex Docker output frames into (stdout, stderr).
+
+        Each frame has an 8-byte header: byte 0 is the stream type
+        (1 = stdout, 2 = stderr), bytes 4-7 are the big-endian frame size.
+        """
+        stdout_parts = []
+        stderr_parts = []
         i = 0
         while i < len(raw_output):
-            # Each frame starts with 8 bytes of header
             if i + 8 > len(raw_output):
                 break
-            # The fourth byte indicates the stream (1 = stdout, 2 = stderr)
-            # The next 4 bytes contain the size of the frame
+            stream_type = raw_output[i]
             frame_size = int.from_bytes(raw_output[i + 4 : i + 8], byteorder="big")
-            # Extract the frame content
             if i + 8 + frame_size > len(raw_output):
                 break
             frame_data = raw_output[i + 8 : i + 8 + frame_size]
-            output_parts.append(frame_data)
+            if stream_type == 2:
+                stderr_parts.append(frame_data)
+            else:
+                stdout_parts.append(frame_data)
             i += 8 + frame_size
 
-        return b"".join(output_parts).decode("utf-8").strip()
+        stdout = b"".join(stdout_parts).decode("utf-8", errors="replace").strip()
+        stderr = b"".join(stderr_parts).decode("utf-8", errors="replace").strip()
+        return stdout, stderr
+
+    async def _start_exec_and_read(self, exec_id: str) -> Tuple[str, str]:
+        """Start an exec instance via the raw Docker API and return its (stdout, stderr)."""
+        async with self._docker._query(
+            f"exec/{exec_id}/start",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"Detach": False, "Tty": False}),
+        ) as response:
+            return self._clean_output(await response.read())
 
     async def execute(
         self,
@@ -290,6 +320,9 @@ class DockerExecutor:
         """Execute code in a Docker container with file management."""
         container = None
         config = config or {}
+
+        # Validate before any filesystem use (session dir mkdir, bind-mount source)
+        validate_session_id(session_id)
 
         try:
             # Ensure Docker client is initialized and valid
@@ -385,6 +418,7 @@ class DockerExecutor:
                         "HostConfig": {
                             "Memory": memory_limit_mb * 1024 * 1024,  # Convert MB to bytes
                             "NanoCpus": int(cpu_limit * 1e9),  # Convert CPU cores to nano CPUs
+                            "PidsLimit": settings.CONTAINER_PIDS_LIMIT,
                             "Mounts": [
                                 {
                                     "Type": "bind",
@@ -426,16 +460,9 @@ class DockerExecutor:
                         stdout=True,
                         stderr=True,
                     )
-                    # Use raw API call to get output
-                    exec_url = f"exec/{exec._id}/start"
-                    async with self._docker._query(
-                        exec_url,
-                        method="POST",
-                        headers={"Content-Type": "application/json"},
-                        data=json.dumps({"Detach": False, "Tty": False}),
-                    ) as response:
-                        output = await response.read()
-                        output_text = self._clean_output(output)
+                    _, chown_stderr = await self._start_exec_and_read(exec._id)
+                    if chown_stderr:
+                        logger.warning(f"chown stderr: {chown_stderr}")
 
                     # Execute the code with the appropriate interpreter
                     logger.info(f"Code to execute: {code}")
@@ -447,21 +474,15 @@ class DockerExecutor:
 
                     # Execute the code with the appropriate interpreter
                     exec = await container.exec(cmd=[*exec_cmd, code], user=exec_user, stdout=True, stderr=True)
-                    # Use raw API call to get output
-                    exec_url = f"exec/{exec._id}/start"
-                    async with self._docker._query(
-                        exec_url,
-                        method="POST",
-                        headers={"Content-Type": "application/json"},
-                        data=json.dumps({"Detach": False, "Tty": False}),
-                    ) as response:
-                        output = await response.read()
-                        output_text = self._clean_output(output)
+                    stdout_text, stderr_text = await asyncio.wait_for(
+                        self._start_exec_and_read(exec._id),
+                        timeout=settings.SANDBOX_MAX_EXECUTION_TIME,
+                    )
 
                     # Check execution status
                     exec_inspect = await exec.inspect()
                     if exec_inspect["ExitCode"] != 0:
-                        return {"stdout": "", "stderr": output_text, "status": "error", "files": []}
+                        return {"stdout": stdout_text, "stderr": stderr_text, "status": "error", "files": []}
 
                     # Scan directory after execution to detect changes
                     logger.info(f"Scanning directory {session_path} after code execution")
@@ -513,8 +534,8 @@ class DockerExecutor:
                             output_files.append(file_data)
 
                     return {
-                        "stdout": output_text,
-                        "stderr": "",
+                        "stdout": stdout_text,
+                        "stderr": stderr_text,
                         "status": "ok",
                         "files": output_files,
                         "metrics": {
@@ -524,6 +545,18 @@ class DockerExecutor:
                                 datetime.now() - self._active_containers[container.id].start_time
                             ).total_seconds(),
                         },
+                    }
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Code execution timed out after {settings.SANDBOX_MAX_EXECUTION_TIME} seconds "
+                        f"for session {session_id}"
+                    )
+                    return {
+                        "stdout": "",
+                        "stderr": f"Execution timed out after {settings.SANDBOX_MAX_EXECUTION_TIME} seconds",
+                        "status": "error",
+                        "files": [],
                     }
 
                 except Exception as e:

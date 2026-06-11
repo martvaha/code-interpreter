@@ -197,6 +197,71 @@ def test_batch_upload():
         assert download.content == expected
 
 
+def test_batch_upload_oversized_file_reported_per_file():
+    """Test that an oversized file in a batch yields a per-file error, not a 413."""
+    from app.shared.config import get_settings
+
+    settings = get_settings()
+    oversized = b"x" * (settings.FILE_MAX_UPLOAD_SIZE + 1)
+
+    response = client.post(
+        "/v1/librechat/upload/batch",
+        files=[
+            ("file", ("ok.txt", b"fits", "text/plain")),
+            ("file", ("huge.txt", oversized, "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    by_name = {f["filename"]: f for f in result["files"]}
+    assert by_name["ok.txt"]["status"] == "success"
+    assert by_name["huge.txt"]["status"] == "error"
+    assert "size limit" in by_name["huge.txt"]["error"]
+
+
+def test_batch_upload_too_many_files_rejected():
+    """Test that batches over FILE_MAX_BATCH_COUNT are rejected before any processing."""
+    from app.shared.config import get_settings
+
+    settings = get_settings()
+    files = [
+        ("file", (f"file_{i}.txt", b"x", "text/plain")) for i in range(settings.FILE_MAX_BATCH_COUNT + 1)
+    ]
+
+    response = client.post("/v1/librechat/upload/batch", files=files)
+
+    assert response.status_code == 413
+    assert "Too many files" in response.json()["message"]
+
+
+def test_batch_upload_oversized_file_rejected_per_file():
+    """Test that an oversized file fails per-file without sinking the rest of the batch."""
+    from app.shared.config import get_settings
+
+    settings = get_settings()
+    oversized = b"x" * (settings.FILE_MAX_UPLOAD_SIZE + 1)
+
+    response = client.post(
+        "/v1/librechat/upload/batch",
+        files=[
+            ("file", ("big.txt", oversized, "text/plain")),
+            ("file", ("small.txt", b"ok", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    by_name = {f["filename"]: f for f in result["files"]}
+    assert by_name["big.txt"]["status"] == "error"
+    assert "exceeds size limit" in by_name["big.txt"]["error"]
+    assert by_name["small.txt"]["status"] == "success"
+
+
 def test_session_object_liveness_check():
     """Test the GET /sessions/{sid}/objects/{fid} endpoint used by primeCodeFiles."""
     upload = client.post(

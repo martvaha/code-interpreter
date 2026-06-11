@@ -33,6 +33,20 @@ def test_code_execution_error():
     assert isinstance(result["files"], list)
 
 
+def test_stderr_only_success_keeps_stdout_empty():
+    """A successful run writing only to stderr must not get the 'Empty...' placeholder."""
+    response = client.post(
+        "/v1/execute",
+        json={"code": "import sys; sys.stderr.write('warning: deprecated\\n')", "lang": "py"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["run"]["status"] == "ok"
+    assert result["run"]["stdout"] == ""
+    assert "warning: deprecated" in result["run"]["stderr"]
+
+
 def test_syntax_error():
     """Test executing code with syntax errors."""
     response = client.post(

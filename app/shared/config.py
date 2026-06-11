@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # File management
     FILE_MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
+    FILE_MAX_BATCH_COUNT: int = 20  # Maximum number of files per upload request
     FILE_ALLOWED_EXTENSIONS: Set[str] = {
         # Programming languages
         "py",
@@ -106,6 +107,7 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_CONTAINERS: int = 10  # Maximum number of concurrent Docker containers
     CONTAINER_MEMORY_LIMIT_MB: int = 512  # Memory limit for Docker containers in MB
     CONTAINER_CPU_LIMIT: float = 1.0  # CPU limit for Docker containers (number of cores)
+    CONTAINER_PIDS_LIMIT: int = 256  # Max processes per container (fork bomb protection)
 
     # Docker network settings
     DOCKER_NETWORK_ENABLED: bool = False  # Whether Docker containers have network access

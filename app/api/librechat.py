@@ -24,6 +24,7 @@ from ..services.database import db_manager
 from ..services.file_manager import file_manager
 from ..shared.config import get_settings
 from app.utils.generate_id import generate_id
+from app.utils.read_upload import read_upload_within_limit
 from .base import (
     execute_code as base_execute_code,
     upload_files as base_upload_files,
@@ -146,12 +147,11 @@ async def upload_files(
     try:
         logger.info(f"File: {file.filename}, content_type: {file.content_type}, kind: {kind}, id: {id}")
 
-        content = await file.read()
-        file_size = len(content)
-        logger.debug(f"File size: {file_size} bytes")
-
-        if file_size > settings.FILE_MAX_UPLOAD_SIZE:
+        try:
+            content = await read_upload_within_limit(file, settings.FILE_MAX_UPLOAD_SIZE)
+        except ValueError:
             return create_error_response(413, f"File exceeds size limit of {settings.FILE_MAX_UPLOAD_SIZE} bytes")
+        logger.debug(f"File size: {len(content)} bytes")
 
         # Reset file pointer and prepare for upload
         file.file = BytesIO(content)
@@ -191,15 +191,19 @@ async def upload_files_batch(
     instead of failing the whole batch.
     """
     try:
+        if len(file) > settings.FILE_MAX_BATCH_COUNT:
+            return create_error_response(
+                413,
+                f"Too many files in batch: {len(file)} exceeds limit of {settings.FILE_MAX_BATCH_COUNT}",
+            )
+
         session_id = generate_id()
         logger.info(f"Batch upload of {len(file)} files to session {session_id}, kind: {kind}, id: {id}")
 
         results: List[LibreChatBatchUploadFileResult] = []
         for upload_file in file:
             try:
-                content = await upload_file.read()
-                if len(content) > settings.FILE_MAX_UPLOAD_SIZE:
-                    raise ValueError(f"File exceeds size limit of {settings.FILE_MAX_UPLOAD_SIZE} bytes")
+                content = await read_upload_within_limit(upload_file, settings.FILE_MAX_UPLOAD_SIZE)
 
                 file_info = await file_manager.save_file(
                     session_id=session_id, file_content=content, filename=upload_file.filename

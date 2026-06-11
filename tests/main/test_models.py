@@ -63,7 +63,7 @@ def test_code_execution_request():
         entity_id="asst_123",
         files=[
             RequestFile(
-                id="1",
+                id="f" * 21,
                 storage_session_id="a" * 21,
                 name="test.txt",
                 resource_id="user123",
@@ -81,13 +81,25 @@ def test_request_file_storage_session_id_validation():
     """Test that storage_session_id rejects path traversal and malformed values."""
     valid_id = "a" * 21
 
-    file = RequestFile(id="1", storage_session_id=valid_id, name="test.txt")
+    file = RequestFile(id="f" * 21, storage_session_id=valid_id, name="test.txt")
     assert file.storage_session_id == valid_id
     assert file.kind is None
 
     for invalid in ["../../etc/passwd", "a/b/c", "abc", "a" * 22, ""]:
         with pytest.raises(ValidationError):
-            RequestFile(id="1", storage_session_id=invalid, name="test.txt")
+            RequestFile(id="f" * 21, storage_session_id=invalid, name="test.txt")
+
+
+def test_request_file_id_validation():
+    """Test that file id rejects path traversal and malformed values."""
+    valid_id = "f" * 21
+
+    file = RequestFile(id=valid_id, storage_session_id="a" * 21, name="test.txt")
+    assert file.id == valid_id
+
+    for invalid in ["../../etc/passwd", "a/b/c", "1", "f" * 22, ""]:
+        with pytest.raises(ValidationError):
+            RequestFile(id=invalid, storage_session_id="a" * 21, name="test.txt")
 
 
 def test_code_execution_request_session_id_validation():

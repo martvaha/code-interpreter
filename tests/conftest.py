@@ -3,7 +3,10 @@ from pathlib import Path
 
 from app.shared.const import CONFIG_PATH
 
-os.environ["HOST_PATH"] = str(Path.cwd())
+# Preserve HOST_PATH from compose (host project dir for Docker bind mounts).
+# Only default to cwd when unset (local `uv run pytest` on the host).
+if "HOST_PATH" not in os.environ:
+    os.environ["HOST_PATH"] = str(Path.cwd())
 
 import pytest
 from app.services.database import db_manager

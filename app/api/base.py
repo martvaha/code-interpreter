@@ -23,6 +23,7 @@ from ..services.docker_executor import docker_executor
 from ..services.file_manager import FileManager
 from ..shared.config import get_settings
 from app.utils.generate_id import generate_id
+from app.utils.read_upload import read_upload_within_limit
 
 settings = get_settings()
 router = APIRouter(prefix=settings.API_PREFIX)
@@ -104,8 +105,10 @@ async def execute_code(
         # Execute code in Docker container
         result = await docker_executor.execute(code=request.code, session_id=session_id, lang=request.lang, files=files)
 
-        # Add a language-specific error message if the stdout is empty
-        if not result.get("stdout"):
+        # Add a language-specific hint when the run produced no stdout. Skip
+        # successful runs that wrote to stderr (e.g. warnings) so the model
+        # isn't told there was no output when stderr carries it.
+        if not result.get("stdout") and (result.get("status") == "error" or not result.get("stderr")):
             if request.lang == "py":
                 result["stdout"] = "Empty. Make sure to explicitly print the results in Python"
             elif request.lang == "r":
@@ -193,6 +196,12 @@ async def upload_files(
 ):
     """Upload files for code execution."""
     try:
+        if len(files) > settings.FILE_MAX_BATCH_COUNT:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Too many files: {len(files)} exceeds limit of {settings.FILE_MAX_BATCH_COUNT}",
+            )
+
         session_id = generate_id()
         logger.info(f"Starting file upload for session: {session_id}")
         uploaded_files = []
@@ -205,14 +214,17 @@ async def upload_files(
                 content = upload_file.file if isinstance(upload_file.file, bytes) else upload_file.file.read()
                 file_size = len(content)
                 logger.info(f"Got file content from bytes/BytesIO, size: {file_size}")
-            else:
-                content = await upload_file.read()
-                file_size = len(content)
-                logger.info(f"Got file content from async read, size: {file_size}")
 
-            if file_size > settings.FILE_MAX_UPLOAD_SIZE:
-                logger.warning(f"File {upload_file.filename} exceeds size limit")
-                raise HTTPException(status_code=413, detail=f"File {upload_file.filename} exceeds size limit")
+                if file_size > settings.FILE_MAX_UPLOAD_SIZE:
+                    logger.warning(f"File {upload_file.filename} exceeds size limit")
+                    raise HTTPException(status_code=413, detail=f"File {upload_file.filename} exceeds size limit")
+            else:
+                try:
+                    content = await read_upload_within_limit(upload_file, settings.FILE_MAX_UPLOAD_SIZE)
+                except ValueError:
+                    logger.warning(f"File {upload_file.filename} exceeds size limit")
+                    raise HTTPException(status_code=413, detail=f"File {upload_file.filename} exceeds size limit")
+                logger.info(f"Got file content from async read, size: {len(content)}")
 
             logger.info(f"Saving file {upload_file.filename} to disk")
             file_info = await file_manager.save_file(
@@ -236,6 +248,8 @@ async def upload_files(
 
         logger.info(f"Successfully uploaded {len(uploaded_files)} files for session: {session_id}")
         return UploadResponse(message="success", session_id=session_id, files=uploaded_files)
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"Upload failed: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))

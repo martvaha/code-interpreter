@@ -25,7 +25,7 @@ class RequestFile(BaseModel):
     in), which may differ per file and from the execution session.
     """
 
-    id: str
+    id: str = Field(..., description="File identifier", pattern="^[A-Za-z0-9_-]{21}$")
     storage_session_id: str = Field(
         ...,
         description="Storage session the file lives in",

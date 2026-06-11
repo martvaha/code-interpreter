@@ -1,6 +1,6 @@
 ---
 description: Librechat specific endpoints
-globs: "app/api/librechat.py"
+globs: app/api/librechat.py
 alwaysApply: false
 ---
 ## Base Path
@@ -12,18 +12,25 @@ All endpoints are prefixed with `/v1/librechat`
 ### 1. Execute Code
 **Endpoint:** `POST /exec`
 
-**Description:** Execute Python and R code in a sandboxed environment
+**Description:** Execute code in a sandboxed environment. Supported languages: `py`, `r`, `bash`, `js`, `ts`. Other languages accepted by validation (e.g. `java`) return a 200 response with a "not supported" message in `stdout` so LibreChat relays it to the model.
 
 **Request Body:**
 ```json
 {
-    "lang": "py",  // Only Python is supported
-    "code": "string",  // The code to execute
-    "files": [  // Optional
+    "lang": "py",
+    "code": "string",            // The code to execute
+    "args": ["string"],          // Optional command line arguments
+    "session_id": "string",      // Optional, continue an existing sandbox session (21-char nanoid)
+    "user_id": "string",         // Optional
+    "entity_id": "string",       // Optional assistant/agent identifier
+    "files": [                   // Optional input file references
         {
-            "id": "string",
-            "name": "string",
-            "size": "number"  // Optional, defaults to 0
+            "id": "string",                  // 21-char nanoid
+            "storage_session_id": "string",  // Storage session the file lives in (21-char nanoid)
+            "name": "string",                // Filename (may contain a relative path)
+            "resource_id": "string",         // Optional, entity owning the storage session
+            "kind": "user",                  // Optional: "user" | "agent" | "skill"
+            "version": 1                     // Optional, only sent for kind == "skill"
         }
     ]
 }
@@ -32,47 +39,46 @@ All endpoints are prefixed with `/v1/librechat`
 **Response:**
 ```json
 {
-    "session_id": "string",
+    "session_id": "string",      // Execution session (fresh per request unless continued)
     "stdout": "string",
     "stderr": "string",
-    "files": [  // Optional
+    "files": [                   // Optional, files generated during execution
         {
             "id": "string",
-            "name": "string",
-            "size": "number",
-            "content_type": "string"
+            "name": "string",                // Relative path within the session directory
+            "storage_session_id": "string",  // Session to download the file from
+            "inherited": true                // Optional, marks unchanged input passthroughs
         }
     ]
 }
 ```
 
 **Error Responses:**
-- `400`: Invalid request (unsupported language or invalid JSON)
+- `400`: Invalid request
 - `401`: Unauthorized
 - `422`: Validation error
 - `500`: Internal server error
-- `503`: Service unavailable
 
-### 2. Upload Files
+### 2. Upload File
 **Endpoint:** `POST /upload`
 
 **Request:**
 - Content-Type: `multipart/form-data`
 
 **Parameters:**
-- `file`: File (required)
-- `entity_id`: String (optional, form field)
+- `file`: File (required, single file)
+- `kind`: String (optional form field: "skill" | "agent" | "user")
+- `id`: String (optional form field, resource identifier: skillId / agentId / userId)
+- `version`: String (optional form field, sent for kind == "skill")
 
 **Headers:**
-- `user-id`: String
 - `x-api-key`: String
-- `user-agent`: String
 
-**Response:**
+**Response:** (each upload creates a new storage session)
 ```json
 {
     "message": "success",
-    "session_id": "string",
+    "storage_session_id": "string",
     "files": [
         {
             "fileId": "string",
@@ -85,13 +91,91 @@ All endpoints are prefixed with `/v1/librechat`
 **Error Responses:**
 - `400`: Bad request
 - `413`: File size too large
+- `500`: Internal server error
 
-### 3. Download File
+### 3. Batch Upload Files
+**Endpoint:** `POST /upload/batch`
+
+**Request:**
+- Content-Type: `multipart/form-data`
+
+**Parameters:**
+- `file`: File[] (required, repeated form field; all files share one storage session)
+- `kind`, `id`, `version`: Same as `/upload`
+- `read_only`: String (optional form field)
+
+**Response:** (per-file results; failures don't fail the whole batch)
+```json
+{
+    "message": "success",          // "error" only if every file failed
+    "storage_session_id": "string",
+    "files": [
+        {
+            "status": "success",   // "success" | "error"
+            "filename": "string",
+            "fileId": "string",    // Present on success
+            "error": "string"      // Present on error
+        }
+    ],
+    "succeeded": 2,
+    "failed": 0
+}
+```
+
+**Error Responses:**
+- `400`: Bad request
+- `413`: File size too large
+
+### 4. Get Session Object Info (liveness check)
+**Endpoint:** `GET /sessions/{session_id}/objects/{file_id}`
+
+**Description:** LibreChat probes this endpoint before each execution to decide whether a previously uploaded file is still available or must be re-uploaded (compares `lastModified` against a 23h window).
+
+**Path Parameters:**
+- `session_id`: String (required)
+- `file_id`: String (required)
+
+**Query Parameters:** (sent by LibreChat for its managed API's session auth; this implementation ignores them)
+- `kind`, `id`, `version` (optional)
+
+**Response:**
+```json
+{
+    "lastModified": "ISO-8601 timestamp"
+}
+```
+
+**Error Responses:**
+- `404`: Object not found (LibreChat falls back to re-upload)
+
+### 5. Delete Session Object
+**Endpoint:** `DELETE /sessions/{session_id}/objects/{file_id}`
+
+**Description:** LibreChat's file deletion tries this endpoint first and falls back to `DELETE /files/{session_id}/{file_id}` on 404/405.
+
+**Path Parameters:**
+- `session_id`: String (required)
+- `file_id`: String (required)
+
+**Response:**
+```json
+{
+    "message": "string"
+}
+```
+
+**Error Responses:**
+- `404`: Object not found
+
+### 6. Download File
 **Endpoint:** `GET /download/{session_id}/{file_id}`
 
 **Path Parameters:**
 - `session_id`: String (required)
 - `file_id`: String (required)
+
+**Query Parameters:** (sent by LibreChat for its managed API's session auth; this implementation ignores them)
+- `kind`, `id`, `version` (optional)
 
 **Response:**
 - Streaming response of the file content
@@ -99,7 +183,7 @@ All endpoints are prefixed with `/v1/librechat`
 **Error Responses:**
 - `404`: File not found
 
-### 4. List Files
+### 7. List Files
 **Endpoint:** `GET /files/{session_id}`
 
 **Path Parameters:**
@@ -107,16 +191,19 @@ All endpoints are prefixed with `/v1/librechat`
 
 **Query Parameters:**
 - `detail`: String (optional)
-  - When set to "summary", returns minimal file information
 
 **Response:**
 ```json
 [
     {
         "name": "session_id/fileId",
+        "id": "string",
+        "storage_session_id": "string",
         "lastModified": "ISO-8601 timestamp",
-        "type": "string",  // Only included if detail != "summary"
-        "size": "number"   // Only included if detail != "summary"
+        "metadata": {
+            "content-type": "string",
+            "original-filename": "string"
+        }
     }
 ]
 ```
@@ -124,7 +211,7 @@ All endpoints are prefixed with `/v1/librechat`
 **Error Responses:**
 - `400`: Bad request
 
-### 5. Delete File
+### 8. Delete File
 **Endpoint:** `DELETE /files/{session_id}/{file_id}`
 
 **Path Parameters:**
@@ -134,7 +221,7 @@ All endpoints are prefixed with `/v1/librechat`
 **Response:**
 ```json
 {
-    "message": "success"
+    "message": "string"
 }
 ```
 
@@ -143,7 +230,11 @@ All endpoints are prefixed with `/v1/librechat`
 
 ## Notes
 
-1. All file operations are session-based, requiring a valid session ID
-2. Maximum file upload size is configured in the application settings
-3. Only Python code execution is currently supported
-4. All endpoints may return standard HTTP error codes for common failure cases
+1. Storage sessions (created by uploads / file generation) are distinct from execution sessions: each `/exec` request gets a fresh sandbox session unless `session_id` is passed, and referenced input files are staged into it from their own storage sessions.
+2. Session and file ids are 21-character nanoids (`^[A-Za-z0-9_-]{21}$`).
+3. Maximum file upload size is configured in the application settings (`FILE_MAX_UPLOAD_SIZE`). LibreChat's client caps uploads at 150MB with a 120s timeout.
+4. Error responses use the LibreChat format: `{"message": "string"}`.
+5. LibreChat appends `?kind=...&id=...[&version=...]` identity query params to download, session-object, and delete requests (required by its managed API's session auth). This implementation ignores them, but endpoints must tolerate unknown query params.
+6. LibreChat sends `User-Agent: LibreChat/1.0` on all requests, `User-Id` on uploads, and authenticates with `x-api-key` (or a minted `Authorization` JWT on newer enterprise setups).
+7. The ONLY authoritative source for what LibreChat sends/expects is its client code (use `main` or the latest release tag of `danny-avila/LibreChat`): `api/server/services/Files/Code/crud.js`, `api/server/services/Files/Code/process.js`, and `packages/api/src/files/code/`. Do NOT validate against the spec published at code.librechat.ai/docs — it documents an outdated API surface (e.g. `session_id` instead of `storage_session_id` in upload responses, no `/upload/batch`) and serving that shape would break current LibreChat clients.
+8. This rule is the project's contract document; update it when LibreChat's client behavior changes. There is no static OpenAPI file — FastAPI generates the live spec from the code (served at `/docs` and `/openapi.json`).

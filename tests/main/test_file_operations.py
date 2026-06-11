@@ -223,4 +223,58 @@ print('Files in /mnt/data:', os.listdir('/mnt/data'))"""
 
     # Test downloading from non-existent session
     response = client.get("/v1/download/nonexistent-session/nonexistent")
-    assert response.status_code == 404 
+    assert response.status_code == 404
+
+
+def test_upload_filename_path_traversal_rejected():
+    """Test that a filename with path traversal is rejected and nothing is written outside uploads/."""
+    from pathlib import Path
+
+    response = client.post(
+        "/v1/upload",
+        files={"files": ("../../../tmp/evil.py", b"print('pwned')", "text/x-python")},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid filename" in response.json()["detail"]
+    assert not Path("/tmp/evil.py").exists()
+
+
+def test_upload_plain_filename_accepted():
+    """Test that a normal filename still uploads fine after traversal hardening."""
+    response = client.post(
+        "/v1/upload",
+        files={"files": ("safe.py", b"print('ok')", "text/x-python")},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["files"][0]["name"] == "safe.py"
+
+
+def test_upload_too_many_files_rejected():
+    """Test that uploads over FILE_MAX_BATCH_COUNT files are rejected with 413."""
+    from app.shared.config import get_settings
+
+    settings = get_settings()
+    files = [
+        ("files", (f"file_{i}.txt", b"x", "text/plain")) for i in range(settings.FILE_MAX_BATCH_COUNT + 1)
+    ]
+
+    response = client.post("/v1/upload", files=files)
+
+    assert response.status_code == 413
+    assert "Too many files" in response.json()["detail"]
+
+
+def test_upload_oversized_file_rejected():
+    """Test that an oversized file is rejected with 413 instead of a 500."""
+    from app.shared.config import get_settings
+
+    settings = get_settings()
+    oversized = b"x" * (settings.FILE_MAX_UPLOAD_SIZE + 1)
+
+    response = client.post("/v1/upload", files={"files": ("big.txt", oversized, "text/plain")})
+
+    assert response.status_code == 413
+    assert "exceeds size limit" in response.json()["detail"]

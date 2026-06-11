@@ -11,6 +11,8 @@ from ..shared.config import get_settings
 from .database import db_manager
 from app.utils.generate_id import generate_id
 from app.shared.const import UPLOAD_PATH
+from .docker_executor import validate_session_id
+
 settings = get_settings()
 
 
@@ -24,6 +26,7 @@ class FileManager:
 
     def _get_session_dir(self, session_id: str) -> Path:
         """Get the directory for a specific session."""
+        validate_session_id(session_id)
         session_dir = self.upload_path / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         return session_dir
@@ -39,6 +42,11 @@ class FileManager:
     async def save_file(self, session_id: str, file_content: bytes, filename: str) -> Dict[str, Any]:
         """Save a file for a session."""
         try:
+            # Reject filenames with directory components to prevent path traversal
+            if not filename or filename in ("..", ".") or Path(filename).name != filename:
+                logger.error(f"Invalid filename: {filename!r}")
+                raise ValueError("Invalid filename")
+
             # Validate file extension
             ext = Path(filename).suffix[1:].lower()
             if ext not in settings.FILE_ALLOWED_EXTENSIONS:
@@ -54,6 +62,11 @@ class FileManager:
             # Save file in session directory with original name
             session_dir = self._get_session_dir(session_id)
             file_path = session_dir / filename
+
+            # Defense in depth: ensure the resolved path stays within the session dir
+            if session_dir.resolve() not in file_path.resolve().parents:
+                logger.error(f"Path traversal detected for filename: {filename!r}")
+                raise ValueError("Path traversal detected")
 
             logger.info(f"Saving file to path: {file_path}")
             logger.info(f"File content size: {len(file_content)} bytes")

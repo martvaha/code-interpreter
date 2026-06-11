@@ -137,21 +137,23 @@ class DatabaseManager:
             await db.commit()
             return cursor.rowcount > 0
 
-    async def cleanup_old_files(self, max_age_hours: int = 24) -> List[Dict[str, Any]]:
-        """Delete files older than specified hours."""
+    async def get_old_files(self, max_age_hours: int = 24) -> List[Dict[str, Any]]:
+        """Get file records older than the specified number of hours."""
         cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            # First get the files to delete
             async with db.execute("SELECT * FROM files WHERE last_modified < ?", (cutoff.isoformat(),)) as cursor:
-                to_delete = [dict(row) for row in await cursor.fetchall()]
+                return [dict(row) for row in await cursor.fetchall()]
 
-            # Then delete them
-            if to_delete:
-                await db.execute("DELETE FROM files WHERE last_modified < ?", (cutoff.isoformat(),))
-                await db.commit()
-
-        return to_delete
+    async def delete_files_by_ids(self, file_ids: List[str]) -> int:
+        """Delete file records by their ids. Returns the number of deleted rows."""
+        if not file_ids:
+            return 0
+        async with aiosqlite.connect(self.db_path) as db:
+            placeholders = ", ".join("?" for _ in file_ids)
+            cursor = await db.execute(f"DELETE FROM files WHERE id IN ({placeholders})", file_ids)
+            await db.commit()
+            return cursor.rowcount
 
 
 # Create a singleton instance

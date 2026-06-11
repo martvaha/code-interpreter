@@ -16,10 +16,6 @@ compose.yml
 .env
 .env.*
 !.env.example
-
-# API documentation
-librechat-code-interpreter-openapi.json
-
 # Editor
 .vscode/
 .idea/

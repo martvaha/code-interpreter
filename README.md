@@ -64,7 +64,26 @@ The API will be available at `http://localhost:8000`. The OpenAPI documentation 
 
 ### Running tests
 
+Most tests exercise code execution, which starts **sandbox containers via the host Docker daemon**. That requires:
+
+1. **A reachable Docker socket** — the app talks to Docker on the host, not inside its own filesystem.
+2. **Correct `HOST_PATH`** — session files live at `./uploads` inside the app, but sandbox bind mounts must use the **host** path (e.g. `/your/project/uploads/<session_id>`). Compose sets `HOST_PATH=$PWD` for this; running pytest with the wrong value causes `bind source path does not exist` errors.
+
+The simplest way to satisfy both is to run tests in the same environment as the dev server:
+
 ```bash
-pytest
+docker compose up -d
+docker compose exec code-interpreter uv run pytest tests -v
 ```
+
+Test logs are written to `logs/test.log`.
+
+**Alternative — run on the host** (without `docker compose exec`):
+
+```bash
+uv sync --all-extras
+uv run pytest tests -v
+```
+
+The first run may take longer while sandbox images (`jupyter/scipy-notebook`, `jupyter/r-notebook`, `node:24-slim`) are pulled.
 
