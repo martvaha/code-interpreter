@@ -17,6 +17,7 @@ dependencies = [
     "python-magic>=0.4.27",
     "loguru>=0.7.3",
     "nanoid>=2.0.0",
+    "pyjwt[crypto]>=2.10.1",
 ]
 
 [project.optional-dependencies]

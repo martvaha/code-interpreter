@@ -32,22 +32,34 @@ By default the project will create two directories in the root directory: `./con
 
 ### Authentication
 
-By default the API is unauthenticated. To require an API key, set `API_KEY` in the service environment (or `.env`):
+The API authenticates requests with short-lived JWTs minted by LibreChat (`Authorization: Bearer <token>`, EdDSA/Ed25519 by default, RS256 also supported). LibreChat signs tokens with a private key; this service verifies them with the matching public key.
 
-```ini
-API_KEY=<your-secret-key>
+By default the API is unauthenticated — when no public key is configured, all requests are accepted (dev mode only; a warning is logged at startup). To enable auth:
+
+1. Generate a keypair:
+
+```bash
+openssl genpkey -algorithm ed25519 -out codeapi-private.pem
+openssl pkey -in codeapi-private.pem -pubout -out codeapi-public.pem
+awk 'NF {printf "%s\\n", $0}' codeapi-public.pem   # \n-escape a PEM for a one-line env value
 ```
 
-When set, all `/v1` endpoints require a matching `x-api-key` header and return `401` otherwise (`/health` stays open). LibreChat sends this header automatically using its `LIBRECHAT_CODE_API_KEY` value, so the two must match.
+2. Set the public key in the service environment (or `.env`):
+
+```ini
+CODEAPI_JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+# or alternatively: CODEAPI_JWT_PUBLIC_KEY_BASE64=<base64-encoded PEM>
+```
+
+When set, all `/v1` endpoints require a valid Bearer token and return `401` otherwise (`/health` stays open). Optional overrides (defaults match LibreChat): `CODEAPI_JWT_ISSUER=librechat`, `CODEAPI_JWT_AUDIENCE=codeapi`, `CODEAPI_JWT_ALGORITHMS=["EdDSA","RS256"]`, `CODEAPI_JWT_LEEWAY=30`.
 
 ### Configuring LibreChat
-
-LibreChat is configured to use the code interpreter API by default.
 
 To configure LibreChat to use the local code interpreter, set the following environment variables in LibreChat:
 
 ```ini
-LIBRECHAT_CODE_API_KEY=<any-value-here> # must match the service's API_KEY if one is configured
+CODEAPI_JWT_ENABLED=true # or CODEAPI_AUTH_PROVIDER=librechat-jwt
+CODEAPI_JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n" # \n-escaped private PEM; _BASE64 and _JWK_JSON variants also exist
 LIBRECHAT_CODE_BASEURL=http(s)://host:port/v1/librechat # for local testing use to point to host IP http://host.docker.internal:8000/v1/librechat
 ```
 

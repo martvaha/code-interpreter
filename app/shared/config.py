@@ -1,8 +1,10 @@
+import base64
+
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 
 class Settings(BaseSettings):
@@ -26,7 +28,23 @@ class Settings(BaseSettings):
     # API settings
     PORT: int = 8000  # Port exposed from the container
     API_PREFIX: str = "/v1"  # API prefix
-    API_KEY: Optional[str] = None  # When set, requests must send a matching x-api-key header
+
+    # JWT auth (LibreChat code-API tokens); auth is disabled when no public key is set
+    CODEAPI_JWT_PUBLIC_KEY: Optional[str] = None  # PEM, "\n"-escaped newlines allowed
+    CODEAPI_JWT_PUBLIC_KEY_BASE64: Optional[str] = None  # base64-encoded PEM alternative
+    CODEAPI_JWT_ISSUER: str = "librechat"
+    CODEAPI_JWT_AUDIENCE: str = "codeapi"
+    CODEAPI_JWT_ALGORITHMS: List[str] = ["EdDSA", "RS256"]
+    CODEAPI_JWT_LEEWAY: int = 30  # seconds of clock-skew tolerance
+
+    @property
+    def JWT_PUBLIC_KEY_PEM(self) -> Optional[str]:
+        """Resolved public key PEM, or None when JWT auth is unconfigured."""
+        if self.CODEAPI_JWT_PUBLIC_KEY:
+            return self.CODEAPI_JWT_PUBLIC_KEY.replace("\\n", "\n").strip()
+        if self.CODEAPI_JWT_PUBLIC_KEY_BASE64:
+            return base64.b64decode(self.CODEAPI_JWT_PUBLIC_KEY_BASE64).decode("utf-8").strip()
+        return None
 
     # Code execution sandbox settings
     SANDBOX_MAX_EXECUTION_TIME: int = 300  # Docker container execution time limit in seconds

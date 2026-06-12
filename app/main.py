@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from .api.auth import verify_api_key
+from .api.auth import verify_jwt
 from .api.base import router as base_router
 from .api.librechat import router as librechat_router
 from .api.container import router as docker_router
@@ -23,6 +23,9 @@ async def lifespan(app: FastAPI):
     # Setup logging first thing
     setup_logging()
     logger.info("Starting application")
+
+    if get_settings().JWT_PUBLIC_KEY_PEM is None:
+        logger.warning("CODEAPI_JWT_PUBLIC_KEY not set — API is UNAUTHENTICATED (dev mode only)")
 
     # Initialize database
     await db_manager.initialize()
@@ -65,10 +68,10 @@ app.add_middleware(
 # Add logging middleware
 app.add_middleware(RequestLoggingMiddleware)
 
-# Include routers (all /v1 routes require x-api-key when API_KEY is configured)
-app.include_router(base_router, dependencies=[Depends(verify_api_key)])
-app.include_router(librechat_router, dependencies=[Depends(verify_api_key)])
-app.include_router(docker_router, dependencies=[Depends(verify_api_key)])
+# Include routers (all /v1 routes require a LibreChat JWT when a public key is configured)
+app.include_router(base_router, dependencies=[Depends(verify_jwt)])
+app.include_router(librechat_router, dependencies=[Depends(verify_jwt)])
+app.include_router(docker_router, dependencies=[Depends(verify_jwt)])
 
 
 @app.exception_handler(HTTPException)
